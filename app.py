@@ -146,7 +146,10 @@ def process_excel(df: pd.DataFrame) -> pd.DataFrame:
     df["ERROR_RELIGIONNAME"] = 0
 
     # ---------- 1. School UDISE Length Check (len != 11) ---------- #
-    udise_str = df["School UDISE"].astype(str).str.strip()
+    udise_str = (
+        df["School UDISE"]
+        .str.strip()
+    )
     df.loc[udise_str.str.len() != 11, "ERROR_SCHOOL_UDISE"] = 1
 
     # ---------- 2. DATE OF BIRTH Format/Missing Check ---------- #
@@ -173,15 +176,17 @@ def process_excel(df: pd.DataFrame) -> pd.DataFrame:
     df.loc[is_adolescent & age_out_range, "ERROR_AGE_RANGE"] = 1
 
     # ---------- 4. Parent Consent Check ---------- #
-    pc_str = df["Parent Consent"].astype(str)
+    # ---------- 4. Parent Consent Check (NON-DESTRUCTIVE) ---------- #
+    pc_raw = df["Parent Consent"]          # NEVER TOUCH THIS
+    pc_work = pc_raw.astype(str).str.strip().str.lower()
 
     is_missing_pc = (
-        df["Parent Consent"].isna()
-        | pc_str.str.strip().eq("")
-        | pc_str.str.lower().eq("nan")
+        pc_raw.isna() |
+        pc_work.eq("") |
+        pc_work.eq("nan")
     )
 
-    is_no_pc = pc_str.str.strip().str.lower().eq("no")
+    is_no_pc = pc_work.eq("no")
 
     df.loc[is_missing_pc | is_no_pc, "ERROR_PARENT_CONSENT"] = 1
 
@@ -389,7 +394,10 @@ Upload a CPRF `.xlsx` file with these mandatory columns:
 
     try:
         with st.spinner("Reading and validating data..."):
-            df = pd.read_excel(uploaded_file)
+            df = pd.read_excel(
+                uploaded_file,
+                dtype={"School UDISE": str}
+            )
             processed_df = process_excel(df)
 
         # ---------- Add Error_Tier based on Total_Errors ----------
