@@ -1,6 +1,8 @@
 import io
 import zipfile
 from datetime import datetime
+from zoneinfo import ZoneInfo
+from pathlib import Path
 import base64
 import hashlib
 import hmac
@@ -679,7 +681,15 @@ Upload a CPRF `.xlsx` file with these mandatory columns:
         rules_df = build_rules_sheet()
 
         # --- DATE STRING FOR FILENAMES ---
-        today_str = datetime.today().strftime("%Y%m%d")
+        # Output filenames: source file name + India date/time.
+        # Seconds are included to prevent overwriting outputs from repeated runs.
+        base_name = Path(uploaded_file.name).stem
+        india_time = datetime.now(ZoneInfo("Asia/Kolkata"))
+        file_timestamp = india_time.strftime("%d%b%Y_%H%M%S")
+
+        validated_filename = f"{base_name}_Validated_{file_timestamp}.xlsx"
+        error_filename = f"{base_name}_Errors_{file_timestamp}.xlsx"
+        zip_filename = f"{base_name}_ProgramLaunch_Files_{file_timestamp}.zip"
 
         # --- DOWNLOAD: FULL DATASET ---
         full_output = io.BytesIO()
@@ -731,7 +741,7 @@ Upload a CPRF `.xlsx` file with these mandatory columns:
             st.download_button(
                 label="Download Full Validated Excel",
                 data=full_output.getvalue(),
-                file_name=f"CPRF_validated_full_{today_str}.xlsx",
+                file_name=validated_filename,
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
 
@@ -739,7 +749,7 @@ Upload a CPRF `.xlsx` file with these mandatory columns:
             st.download_button(
                 label="Download Error Rows Only",
                 data=error_output.getvalue(),
-                file_name=f"CPRF_validated_errors_only_{today_str}.xlsx",
+                file_name=error_filename,
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
 
@@ -747,7 +757,7 @@ Upload a CPRF `.xlsx` file with these mandatory columns:
             st.download_button(
                 label="Download ZIP by ProgramLaunchName",
                 data=zip_buffer.getvalue(),
-                file_name=f"CPRF_by_ProgramLaunchName_{today_str}.zip",
+                file_name=zip_filename,
                 mime="application/x-zip-compressed",
             )
 
