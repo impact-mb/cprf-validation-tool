@@ -2,6 +2,8 @@ import io
 import zipfile
 from datetime import datetime
 import base64
+import hashlib
+import hmac
 
 import pandas as pd
 import streamlit as st
@@ -9,6 +11,172 @@ import requests
 
 
 GITHUB_API_URL = "https://api.github.com"
+APP_VERSION = "2026.01"
+APP_OWNER = "Magic Bus Impact Team"
+
+
+# --------------- Authentication Helpers --------------- #
+HASH_SCHEME = "pbkdf2_sha256"
+
+
+def get_login_credentials():
+    """Read the username and PASSWORD HASH from Streamlit Secrets.
+
+    Required secrets:
+    - APP_USERNAME
+    - APP_PASSWORD_HASH
+
+    The original password is never stored in the repository or Streamlit Secrets.
+    """
+    try:
+        username = str(st.secrets["APP_USERNAME"])
+        password_hash = str(st.secrets["APP_PASSWORD_HASH"])
+        return username, password_hash
+    except Exception:
+        return None, None
+
+
+def verify_password(password: str, stored_hash: str) -> bool:
+    """Verify a password against a salted PBKDF2-SHA256 hash.
+
+    Expected format:
+        pbkdf2_sha256$ITERATIONS$SALT_HEX$DIGEST_HEX
+    """
+    try:
+        scheme, iterations_text, salt_hex, digest_hex = stored_hash.split("$", 3)
+        if scheme != HASH_SCHEME:
+            return False
+
+        iterations = int(iterations_text)
+        if iterations < 100_000:
+            return False
+
+        salt = bytes.fromhex(salt_hex)
+        expected_digest = bytes.fromhex(digest_hex)
+        actual_digest = hashlib.pbkdf2_hmac(
+            "sha256",
+            password.encode("utf-8"),
+            salt,
+            iterations,
+        )
+        return hmac.compare_digest(actual_digest, expected_digest)
+    except (ValueError, TypeError, AttributeError):
+        return False
+
+
+def authenticate(username: str, password: str) -> bool:
+    """Authenticate a user without storing or comparing a plaintext password."""
+    expected_user, expected_password_hash = get_login_credentials()
+    if expected_user is None or expected_password_hash is None:
+        return False
+
+    username_ok = hmac.compare_digest(username, expected_user)
+    password_ok = verify_password(password, expected_password_hash)
+    return username_ok and password_ok
+
+
+def render_login_page():
+    """Render the branded landing/login layer."""
+    st.markdown(
+        """
+        <style>
+        .stApp {
+            background: linear-gradient(135deg, #f7f8fa 0%, #eef2f6 100%);
+        }
+        .login-hero {
+            max-width: 760px;
+            margin: 6vh auto 1.2rem auto;
+            text-align: center;
+        }
+        .login-title {
+            font-size: 2.35rem;
+            font-weight: 750;
+            margin-bottom: .25rem;
+        }
+        .login-subtitle {
+            font-size: 1.05rem;
+            color: #4b5563;
+            margin-bottom: .35rem;
+        }
+        .release-pill {
+            display: inline-block;
+            padding: .3rem .7rem;
+            border: 1px solid #d1d5db;
+            border-radius: 999px;
+            font-size: .85rem;
+            color: #374151;
+            background: white;
+        }
+        .login-foot {
+            text-align:center;
+            color:#6b7280;
+            font-size:.82rem;
+            margin-top:1.2rem;
+        }
+        </style>
+        <div class="login-hero">
+            <div class="login-title">CPRF Validation Tool</div>
+            <div class="login-subtitle">Data Quality & Validation Workspace</div>
+            <span class="release-pill">Release v2026.01 · Magic Bus Impact Team</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    left, centre, right = st.columns([1.2, 1, 1.2])
+    with centre:
+        with st.form("login_form", clear_on_submit=False):
+            st.markdown("### Sign in")
+            st.caption("Authorized Magic Bus users only")
+            username = st.text_input("Username", placeholder="Enter username")
+            password = st.text_input(
+                "Password", type="password", placeholder="Enter password"
+            )
+            submitted = st.form_submit_button(
+                "Login", use_container_width=True, type="primary"
+            )
+
+        if submitted:
+            configured_user, configured_password_hash = get_login_credentials()
+            if configured_user is None or configured_password_hash is None:
+                st.error(
+                    "Login is not configured. Add APP_USERNAME and APP_PASSWORD_HASH "
+                    "to Streamlit Secrets."
+                )
+            elif authenticate(username.strip(), password):
+                st.session_state["authenticated"] = True
+                st.session_state["authenticated_user"] = username.strip()
+                st.rerun()
+            else:
+                st.error("Invalid username or password.")
+
+    st.markdown(
+        '<div class="login-foot">Internal utility · Magic Bus Impact Team</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def render_authenticated_header():
+    """Top bar shown after successful login."""
+    title_col, user_col, logout_col = st.columns([6, 2, 1])
+    with title_col:
+        st.markdown(
+            f"### CPRF Validation Tool <span style='font-size:.78rem; "
+            f"font-weight:500; color:#6b7280;'>v{APP_VERSION}</span>",
+            unsafe_allow_html=True,
+        )
+        st.caption(f"Released by {APP_OWNER}")
+    with user_col:
+        user = st.session_state.get("authenticated_user", "User")
+        st.caption("Signed in as")
+        st.write(f"**{user}**")
+    with logout_col:
+        if st.button("Logout", use_container_width=True):
+            st.session_state["authenticated"] = False
+            st.session_state.pop("authenticated_user", None)
+            st.rerun()
+
+    st.divider()
 
 
 # --------------- GitHub Counter Helpers --------------- #
@@ -305,13 +473,20 @@ def safe_filename_from_pln(pln_value: str) -> str:
 
 # --------------- Streamlit App --------------- #
 def main():
-    st.set_page_config(page_title="CPRF Validation Tool", layout="wide")
-
-    # Title
-    st.markdown(
-        "<h1 style='text-align:center;'>CPRF Validation Tool</h1>",
-        unsafe_allow_html=True,
+    st.set_page_config(
+        page_title=f"CPRF Validation Tool | v{APP_VERSION}",
+        page_icon="🔐",
+        layout="wide",
     )
+
+    if "authenticated" not in st.session_state:
+        st.session_state["authenticated"] = False
+
+    if not st.session_state["authenticated"]:
+        render_login_page()
+        return
+
+    render_authenticated_header()
 
     # Main instructions + Total_Errors line
     st.write(
