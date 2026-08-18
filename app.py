@@ -13,7 +13,7 @@ import requests
 
 
 GITHUB_API_URL = "https://api.github.com"
-APP_VERSION = "2026.01.01"
+APP_VERSION = "2026.01"
 APP_OWNER = "Magic Bus Impact Team"
 
 
@@ -138,7 +138,7 @@ def render_login_page():
         <div class="login-hero">
             <div class="login-title">CPRF Validation Tool</div>
             <div class="login-subtitle">Data Quality & Validation Workspace</div>
-            <span class="release-pill">Release v2026.01.01 · Magic Bus Impact Team</span>
+            <span class="release-pill">Release v2026.01 · Magic Bus Impact Team</span>
         </div>
         """,
         unsafe_allow_html=True,
@@ -416,56 +416,6 @@ def process_excel(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-# --------------- Missing Contact Number Export --------------- #
-def build_missing_contact_dataset(df: pd.DataFrame) -> pd.DataFrame:
-    """Return only rows where CONTACTNUMBER is missing.
-
-    The output is intentionally limited to operational follow-up fields requested
-    by the Impact Team, plus ContactNumberisMissing for clear issue tagging.
-    """
-    if "CONTACTNUMBER" not in df.columns:
-        raise ValueError(
-            "CONTACTNUMBER column is required for the Missing Contact Numbers output."
-        )
-
-    contact_raw = df["CONTACTNUMBER"]
-    contact_text = contact_raw.astype(str).str.strip()
-    is_missing_contact = (
-        contact_raw.isna()
-        | contact_text.eq("")
-        | contact_text.str.lower().isin(["nan", "none", "null", "missing"])
-    )
-
-    output_columns = [
-        "REGIONNAME",
-        "STATENAME",
-        "DISTRICTNAME",
-        "Community/School",
-        "School Type",
-        "School UDISE",
-        "PROGRAMTYPENAME",
-        "PROGRAMSUBTYPENAME",
-        "ProgramLaunchName",
-        "FUNDERNAME",
-        "Child School Name",
-        "CHILDID",
-        "CONTACTNUMBER",
-    ]
-
-    missing_contact_df = df.loc[is_missing_contact].copy()
-
-    # Keep the export usable even if an optional descriptive field is absent
-    # from a future CPRF extract. CONTACTNUMBER itself remains mandatory above.
-    for column in output_columns:
-        if column not in missing_contact_df.columns:
-            missing_contact_df[column] = pd.NA
-
-    missing_contact_df = missing_contact_df[output_columns].copy()
-    missing_contact_df["ContactNumberisMissing"] = "Phone Number Missing"
-
-    return missing_contact_df.reset_index(drop=True)
-
-
 # --------------- Rules Sheet (Sheet Shee2) --------------- #
 def build_rules_sheet() -> pd.DataFrame:
     """Create a DataFrame describing all validation rules."""
@@ -501,10 +451,6 @@ def build_rules_sheet() -> pd.DataFrame:
         [
             "RELIGIONNAME",
             "ERROR_RELIGIONNAME = 1 when RELIGIONNAME is blank / NaN / 'nan' OR equals 'missing' (case-insensitive).",
-        ],
-        [
-            "Missing CONTACTNUMBER follow-up export",
-            "Creates a dedicated Contact_Number_Missing sheet/file containing only records where CONTACTNUMBER is blank / NaN / 'nan' / 'none' / 'null' / 'missing', with ContactNumberisMissing = 'Phone Number Missing'. This is a follow-up output and does not add to Total_Errors in v2026.01.01.",
         ],
         [
             "Total_Errors",
@@ -568,18 +514,6 @@ def main():
 
     render_authenticated_header()
 
-    with st.expander(f"What's new in v{APP_VERSION}", expanded=False):
-        st.markdown(
-            """
-- Added a dedicated **Missing Contact Numbers** follow-up dataset.
-- Records are included when `CONTACTNUMBER` is blank or missing.
-- The output contains the agreed programme/location/child fields plus `ContactNumberisMissing`.
-- `ContactNumberisMissing` is tagged as **Phone Number Missing**.
-- The missing-contact list is included as a sheet in the full validated workbook and is also available as a separate Excel download.
-- Existing CPRF validation error scoring remains unchanged in this patch release.
-"""
-        )
-
     # Main instructions + Total_Errors line
     st.write(
         """
@@ -605,9 +539,8 @@ Upload a CPRF `.xlsx` file with these mandatory columns:
 5. `ERROR_PARENT_CONSENT = 1` → `Parent Consent` is blank / NaN / "nan" / "No"  
 6. `ERROR_P_AGE = 1` → `P_Age` contains any `0` (even in comma-separated values)  
 7. `ERROR_RELIGIONNAME = 1` → `RELIGIONNAME` is blank / NaN / "nan" / "missing"`  
-8. **Missing Contact Numbers follow-up** → records with blank `CONTACTNUMBER` are exported separately with `ContactNumberisMissing = "Phone Number Missing"`  
 
-**Total_Errors** = sum of the existing validation error flags for each row. The missing-contact follow-up flag does **not** change `Total_Errors` in v2026.01.01.
+**Total_Errors** = sum of all error flags for each row.
 """
     )
 
@@ -738,21 +671,11 @@ Upload a CPRF `.xlsx` file with these mandatory columns:
         # --- PREVIEW (TOP 10 ERROR ROWS, already sorted by Total_Errors desc) ---
         st.subheader("Preview of Error Rows (Top 10 Only)")
         error_df = processed_df[processed_df["Total_Errors"] > 0].copy()
-        missing_contact_df = build_missing_contact_dataset(processed_df)
 
         if error_df.empty:
             st.info("No errors found! (Total_Errors = 0 for all rows)")
         else:
             st.dataframe(error_df.head(10))
-
-        st.subheader("Missing Contact Numbers")
-        st.write(
-            f"Records with missing `CONTACTNUMBER`: **{len(missing_contact_df):,}**"
-        )
-        if missing_contact_df.empty:
-            st.success("No records with missing CONTACTNUMBER were found.")
-        else:
-            st.dataframe(missing_contact_df.head(10), use_container_width=True)
 
         # --- BUILD RULES SHEET DATAFRAME ---
         rules_df = build_rules_sheet()
@@ -767,17 +690,11 @@ Upload a CPRF `.xlsx` file with these mandatory columns:
         validated_filename = f"{base_name}_Validated_{file_timestamp}.xlsx"
         error_filename = f"{base_name}_Errors_{file_timestamp}.xlsx"
         zip_filename = f"{base_name}_ProgramLaunch_Files_{file_timestamp}.zip"
-        missing_contact_filename = (
-            f"{base_name}_Missing_Contact_Numbers_{file_timestamp}.xlsx"
-        )
 
         # --- DOWNLOAD: FULL DATASET ---
         full_output = io.BytesIO()
         with pd.ExcelWriter(full_output, engine="openpyxl") as writer:
             processed_df.to_excel(writer, index=False, sheet_name="Validated_Data")
-            missing_contact_df.to_excel(
-                writer, index=False, sheet_name="Contact_Number_Missing"
-            )
             rules_df.to_excel(writer, index=False, sheet_name="Shee2")
         full_output.seek(0)
 
@@ -787,14 +704,6 @@ Upload a CPRF `.xlsx` file with these mandatory columns:
             error_df.to_excel(writer, index=False, sheet_name="Error_Rows")
             rules_df.to_excel(writer, index=False, sheet_name="Shee2")
         error_output.seek(0)
-
-        # --- DOWNLOAD: MISSING CONTACT NUMBERS FOLLOW-UP DATASET ---
-        missing_contact_output = io.BytesIO()
-        with pd.ExcelWriter(missing_contact_output, engine="openpyxl") as writer:
-            missing_contact_df.to_excel(
-                writer, index=False, sheet_name="Contact_Number_Missing"
-            )
-        missing_contact_output.seek(0)
 
         # --- DOWNLOAD: ZIP BY ProgramLaunchName (full + error subset, per PLN) ---
         zip_buffer = io.BytesIO()
@@ -826,7 +735,7 @@ Upload a CPRF `.xlsx` file with these mandatory columns:
         zip_buffer.seek(0)
 
         st.subheader("Download Outputs")
-        col_a, col_b, col_c, col_d = st.columns(4)
+        col_a, col_b, col_c = st.columns(3)
 
         with col_a:
             st.download_button(
@@ -850,14 +759,6 @@ Upload a CPRF `.xlsx` file with these mandatory columns:
                 data=zip_buffer.getvalue(),
                 file_name=zip_filename,
                 mime="application/x-zip-compressed",
-            )
-
-        with col_d:
-            st.download_button(
-                label="Download Missing Contact Numbers",
-                data=missing_contact_output.getvalue(),
-                file_name=missing_contact_filename,
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
 
     except ValueError as ve:
