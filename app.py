@@ -103,25 +103,25 @@ def render_login_page():
     st.markdown(
         f"""
         <style>
-        .stApp {
+        .stApp {{
             background: linear-gradient(135deg, #f7f8fa 0%, #eef2f6 100%);
-        }
-        .login-hero {
+        }}
+        .login-hero {{
             max-width: 760px;
             margin: 6vh auto 1.2rem auto;
             text-align: center;
-        }
-        .login-title {
+        }}
+        .login-title {{
             font-size: 2.35rem;
             font-weight: 750;
             margin-bottom: .25rem;
-        }
-        .login-subtitle {
+        }}
+        .login-subtitle {{
             font-size: 1.05rem;
             color: #4b5563;
             margin-bottom: .35rem;
-        }
-        .release-pill {
+        }}
+        .release-pill {{
             display: inline-block;
             padding: .3rem .7rem;
             border: 1px solid #d1d5db;
@@ -129,13 +129,13 @@ def render_login_page():
             font-size: .85rem;
             color: #374151;
             background: white;
-        }
-        .login-foot {
+        }}
+        .login-foot {{
             text-align:center;
             color:#6b7280;
             font-size:.82rem;
             margin-top:1.2rem;
-        }
+        }}
         </style>
         <div class="login-hero">
             <div class="login-title">CPRF Validation Tool</div>
