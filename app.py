@@ -1,19 +1,21 @@
 import io
+import re
 import zipfile
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from pathlib import Path
-import base64
 import hashlib
 import hmac
+import uuid
+
+import gspread
+from docx import Document
 
 import pandas as pd
 import streamlit as st
-import requests
 
 
-GITHUB_API_URL = "https://api.github.com"
-APP_VERSION = "2026.01"
+APP_VERSION = "2026.01.02"
 APP_OWNER = "Magic Bus Impact Team"
 
 
@@ -99,7 +101,7 @@ def authenticate(username: str, password: str):
 def render_login_page():
     """Render the branded landing/login layer."""
     st.markdown(
-        """
+        f"""
         <style>
         .stApp {
             background: linear-gradient(135deg, #f7f8fa 0%, #eef2f6 100%);
@@ -138,7 +140,7 @@ def render_login_page():
         <div class="login-hero">
             <div class="login-title">CPRF Validation Tool</div>
             <div class="login-subtitle">Data Quality & Validation Workspace</div>
-            <span class="release-pill">Release v2026.01 · Magic Bus Impact Team</span>
+            <span class="release-pill">Release v{APP_VERSION} · {APP_OWNER}</span>
         </div>
         """,
         unsafe_allow_html=True,
@@ -170,6 +172,7 @@ def render_login_page():
                     st.session_state["authenticated"] = True
                     st.session_state["authenticated_user"] = account["username"]
                     st.session_state["authenticated_role"] = account["role"]
+                    log_successful_login(account["username"], account["role"])
                     st.rerun()
                 else:
                     st.error("Invalid username or password.")
@@ -205,83 +208,151 @@ def render_authenticated_header():
     st.divider()
 
 
-# --------------- GitHub Counter Helpers --------------- #
-def update_counter_github():
-    """
-    Read a counter from a file in the GitHub repo, increment it by 1,
-    write updated value back to GitHub, and return the new value.
+# --------------- Google Sheet Login Audit --------------- #
+def log_successful_login(username: str, role: str) -> bool:
+    """Append one successful login event to the configured Google Sheet.
 
-    Requires the following in Streamlit secrets (or .streamlit/secrets.toml locally):
-    - GITHUB_OWNER         (e.g. "impact-mb")
-    - GITHUB_REPO          (e.g. "cprf-validation-tool")
-    - GITHUB_TOKEN         (a GitHub PAT with 'repo' scope)
-    - COUNTER_FILE_PATH    (optional, default: "usage_counter.txt")
+    Expected Streamlit Secrets:
 
-    If anything fails, returns None and the app continues.
+        [login_sheet]
+        spreadsheet_id = "..."
+        worksheet_name = "Login_Log"
+
+        [gcp_service_account]
+        ...Google service account fields...
+
+    Logging is deliberately fail-safe: authentication is never blocked when
+    Google Sheets is temporarily unavailable.
     """
     try:
-        owner = st.secrets["GITHUB_OWNER"]
-        repo = st.secrets["GITHUB_REPO"]
-        token = st.secrets["GITHUB_TOKEN"]
-        path = st.secrets.get("COUNTER_FILE_PATH", "usage_counter.txt")
+        spreadsheet_id = str(st.secrets["login_sheet"]["spreadsheet_id"]).strip()
+        worksheet_name = str(
+            st.secrets["login_sheet"].get("worksheet_name", "Login_Log")
+        ).strip()
+        credentials = dict(st.secrets["gcp_service_account"])
+
+        client = gspread.service_account_from_dict(credentials)
+        worksheet = client.open_by_key(spreadsheet_id).worksheet(worksheet_name)
+
+        login_dt = datetime.now(ZoneInfo("Asia/Kolkata"))
+        event_id = str(uuid.uuid4())
+        worksheet.append_row(
+            [
+                event_id,
+                username,
+                role,
+                login_dt.strftime("%d-%m-%Y"),
+                login_dt.strftime("%H:%M:%S"),
+                login_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                APP_VERSION,
+            ],
+            value_input_option="USER_ENTERED",
+        )
+        print(
+            f"Google Sheet login audit recorded: user={username}, "
+            f"role={role}, event_id={event_id}"
+        )
+        return True
+    except Exception as exc:
+        print(f"Google Sheet login logging failed: {exc}")
+        return False
+
+
+# --------------- Documentation Helpers --------------- #
+DOCS_DIR = Path("docs")
+MANUAL_PATH = DOCS_DIR / "CPRF_VALIDATION_TOOL_MANUAL.md"
+RELEASE_NOTES_PATH = DOCS_DIR / "RELEASE_NOTES.md"
+
+
+def read_text_file(path: Path) -> str:
+    """Read a UTF-8 documentation file without breaking the app if absent."""
+    try:
+        return path.read_text(encoding="utf-8")
     except Exception:
-        st.warning("GitHub counter not configured in secrets; skipping global counter.")
-        return None
+        return ""
 
-    headers = {
-        "Authorization": f"token {token}",
-        "Accept": "application/vnd.github+json",
-    }
 
-    url = f"{GITHUB_API_URL}/repos/{owner}/{repo}/contents/{path}"
+def markdown_to_docx_bytes(markdown_text: str) -> bytes:
+    """Create a simple, shareable Word copy from the maintained Markdown manual."""
+    document = Document()
+    document.core_properties.title = "CPRF Validation Tool - User & Technical Manual"
+    document.core_properties.subject = f"CPRF Validation Tool v{APP_VERSION}"
+    document.core_properties.author = APP_OWNER
 
-    try:
-        # 1) Get existing file (if present)
-        resp = requests.get(url, headers=headers)
-        if resp.status_code == 200:
-            data = resp.json()
-            sha = data["sha"]
-            content_b64 = data["content"]
-            content_bytes = base64.b64decode(content_b64)
-            try:
-                current = int(content_bytes.decode("utf-8").strip())
-            except ValueError:
-                current = 0
-        elif resp.status_code == 404:
-            # File doesn't exist yet
-            sha = None
-            current = 0
+    for raw_line in markdown_text.splitlines():
+        line = raw_line.rstrip()
+        stripped = line.strip()
+
+        if not stripped:
+            document.add_paragraph()
+        elif stripped.startswith("### "):
+            document.add_heading(stripped[4:], level=3)
+        elif stripped.startswith("## "):
+            document.add_heading(stripped[3:], level=2)
+        elif stripped.startswith("# "):
+            document.add_heading(stripped[2:], level=1)
+        elif stripped.startswith("- "):
+            document.add_paragraph(stripped[2:], style="List Bullet")
+        elif re.match(r"^\d+\.\s", stripped):
+            text = re.sub(r"^\d+\.\s+", "", stripped)
+            document.add_paragraph(text, style="List Number")
+        elif stripped.startswith("```"):
+            continue
+        elif stripped.startswith("|"):
+            # Markdown tables remain readable as text in the generated Word copy.
+            document.add_paragraph(stripped)
         else:
-            st.warning(f"GitHub counter GET failed: {resp.status_code} {resp.text}")
-            return None
+            clean = stripped.replace("**", "").replace("`", "")
+            document.add_paragraph(clean)
 
-        new_value = current + 1
+    buffer = io.BytesIO()
+    document.save(buffer)
+    buffer.seek(0)
+    return buffer.getvalue()
 
-        # 2) Prepare new content
-        new_content_str = str(new_value)
-        new_content_b64 = base64.b64encode(new_content_str.encode("utf-8")).decode(
-            "utf-8"
+
+def render_manual_page():
+    st.subheader("User & Technical Manual")
+    st.caption(
+        "The Markdown file in the repository is the master copy. "
+        "Update it whenever the tool changes."
+    )
+    manual = read_text_file(MANUAL_PATH)
+    if not manual:
+        st.warning(
+            "Manual not found. Add docs/CPRF_VALIDATION_TOOL_MANUAL.md to the repository."
+        )
+        return
+
+    st.markdown(manual)
+    st.divider()
+    col_md, col_docx = st.columns(2)
+    file_date = datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%d%m%Y")
+    with col_md:
+        st.download_button(
+            "Download Manual (.md)",
+            data=manual.encode("utf-8"),
+            file_name=f"CPRF_Validation_Tool_Manual_v{APP_VERSION}_{file_date}.md",
+            mime="text/markdown",
+            use_container_width=True,
+        )
+    with col_docx:
+        st.download_button(
+            "Download Manual (.docx)",
+            data=markdown_to_docx_bytes(manual),
+            file_name=f"CPRF_Validation_Tool_Manual_v{APP_VERSION}_{file_date}.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            use_container_width=True,
         )
 
-        payload = {
-            "message": f"Update usage counter to {new_value}",
-            "content": new_content_b64,
-        }
-        if sha is not None:
-            payload["sha"] = sha
 
-        put_resp = requests.put(url, headers=headers, json=payload)
-        if put_resp.status_code not in (200, 201):
-            st.warning(
-                f"GitHub counter PUT failed: {put_resp.status_code} {put_resp.text}"
-            )
-            return None
-
-        return new_value
-
-    except Exception as e:
-        st.warning(f"GitHub counter update error: {e}")
-        return None
+def render_release_notes_page():
+    st.subheader("Release Notes")
+    notes = read_text_file(RELEASE_NOTES_PATH)
+    if not notes:
+        st.warning("Release notes not found. Add docs/RELEASE_NOTES.md to the repository.")
+        return
+    st.markdown(notes)
 
 
 # --------------- Core Processing Function --------------- #
@@ -514,6 +585,21 @@ def main():
 
     render_authenticated_header()
 
+    page = st.radio(
+        "Workspace",
+        ["Validation", "User Manual", "Release Notes"],
+        horizontal=True,
+        label_visibility="collapsed",
+    )
+    st.divider()
+
+    if page == "User Manual":
+        render_manual_page()
+        return
+    if page == "Release Notes":
+        render_release_notes_page()
+        return
+
     # Main instructions + Total_Errors line
     st.write(
         """
@@ -612,18 +698,10 @@ Upload a CPRF `.xlsx` file with these mandatory columns:
             by="Total_Errors", ascending=False
         ).reset_index(drop=True)
 
-        # ---------- Global Counter (GitHub-backed) ----------
-        counter_value = update_counter_github()
-
         st.success("Validation complete!")
 
         # ---------- SUMMARY METRICS ----------
         st.subheader("Summary")
-
-        col_counter, col_blank = st.columns(2)
-        with col_counter:
-            if counter_value is not None:
-                st.markdown(f"**Files processed (all-time):** {counter_value}")
 
         total_rows = len(processed_df)
         rows_with_errors = int((processed_df["Total_Errors"] > 0).sum())
@@ -677,33 +755,93 @@ Upload a CPRF `.xlsx` file with these mandatory columns:
         else:
             st.dataframe(error_df.head(10))
 
+        # --- MISSING CONTACT NUMBER FOLLOW-UP ---
+        contact_columns = [
+            "REGIONNAME",
+            "STATENAME",
+            "DISTRICTNAME",
+            "Community/School",
+            "School Type",
+            "School UDISE",
+            "PROGRAMTYPENAME",
+            "PROGRAMSUBTYPENAME",
+            "ProgramLaunchName",
+            "FUNDERNAME",
+            "Child School Name",
+            "CHILDID",
+            "CONTACTNUMBER",
+        ]
+        missing_contact_df = pd.DataFrame(columns=contact_columns + ["ContactNumberisMissing"])
+
+        if "CONTACTNUMBER" in processed_df.columns:
+            contact_work = processed_df["CONTACTNUMBER"].astype(str).str.strip()
+            missing_contact_mask = (
+                processed_df["CONTACTNUMBER"].isna()
+                | contact_work.eq("")
+                | contact_work.str.lower().isin(["nan", "none", "missing"])
+            )
+            available_contact_columns = [
+                col for col in contact_columns if col in processed_df.columns
+            ]
+            missing_contact_df = processed_df.loc[
+                missing_contact_mask, available_contact_columns
+            ].copy()
+
+            # Ensure the requested output columns always exist and remain in order.
+            for col in contact_columns:
+                if col not in missing_contact_df.columns:
+                    missing_contact_df[col] = ""
+            missing_contact_df = missing_contact_df[contact_columns]
+            missing_contact_df["ContactNumberisMissing"] = "Phone Number Missing"
+
+        st.subheader("Missing Contact Numbers")
+        st.write(
+            f"Records with missing CONTACTNUMBER: **{len(missing_contact_df):,}**"
+        )
+        if not missing_contact_df.empty:
+            st.dataframe(missing_contact_df.head(20), use_container_width=True)
+        else:
+            st.info("No missing CONTACTNUMBER records found in this file.")
+
         # --- BUILD RULES SHEET DATAFRAME ---
         rules_df = build_rules_sheet()
 
-        # --- DATE STRING FOR FILENAMES ---
-        # Output filenames: source file name + India date/time.
-        # Seconds are included to prevent overwriting outputs from repeated runs.
+        # --- DATE STRING FOR FILENAMES (v2026.01.02) ---
+        # Output filenames use DDMMYYYY only; time and seconds are intentionally removed.
         base_name = Path(uploaded_file.name).stem
-        india_time = datetime.now(ZoneInfo("Asia/Kolkata"))
-        file_timestamp = india_time.strftime("%d%b%Y_%H%M%S")
+        file_date = datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%d%m%Y")
 
-        validated_filename = f"{base_name}_Validated_{file_timestamp}.xlsx"
-        error_filename = f"{base_name}_Errors_{file_timestamp}.xlsx"
-        zip_filename = f"{base_name}_ProgramLaunch_Files_{file_timestamp}.zip"
+        validated_filename = f"{base_name}_Validated_{file_date}.xlsx"
+        error_filename = f"{base_name}_Errors_{file_date}.xlsx"
+        missing_contact_filename = (
+            f"{base_name}_Missing_Contact_Numbers_{file_date}.xlsx"
+        )
+        zip_filename = f"{base_name}_ProgramLaunch_Files_{file_date}.zip"
 
         # --- DOWNLOAD: FULL DATASET ---
         full_output = io.BytesIO()
         with pd.ExcelWriter(full_output, engine="openpyxl") as writer:
             processed_df.to_excel(writer, index=False, sheet_name="Validated_Data")
-            rules_df.to_excel(writer, index=False, sheet_name="Shee2")
+            missing_contact_df.to_excel(
+                writer, index=False, sheet_name="Contact_Number_Missing"
+            )
+            rules_df.to_excel(writer, index=False, sheet_name="Rules")
         full_output.seek(0)
 
         # --- DOWNLOAD: ERROR-ONLY DATASET ---
         error_output = io.BytesIO()
         with pd.ExcelWriter(error_output, engine="openpyxl") as writer:
             error_df.to_excel(writer, index=False, sheet_name="Error_Rows")
-            rules_df.to_excel(writer, index=False, sheet_name="Shee2")
+            rules_df.to_excel(writer, index=False, sheet_name="Rules")
         error_output.seek(0)
+
+        # --- DOWNLOAD: MISSING CONTACT NUMBER DATASET ---
+        missing_contact_output = io.BytesIO()
+        with pd.ExcelWriter(missing_contact_output, engine="openpyxl") as writer:
+            missing_contact_df.to_excel(
+                writer, index=False, sheet_name="Missing_Contact_Numbers"
+            )
+        missing_contact_output.seek(0)
 
         # --- DOWNLOAD: ZIP BY ProgramLaunchName (full + error subset, per PLN) ---
         zip_buffer = io.BytesIO()
@@ -726,7 +864,7 @@ Upload a CPRF `.xlsx` file with these mandatory columns:
                         index=False,
                         sheet_name="Error_Rows",
                     )
-                    rules_df.to_excel(writer, index=False, sheet_name="Shee2")
+                    rules_df.to_excel(writer, index=False, sheet_name="Rules")
                 file_buffer.seek(0)
 
                 safe_name = safe_filename_from_pln(pln)
@@ -735,7 +873,7 @@ Upload a CPRF `.xlsx` file with these mandatory columns:
         zip_buffer.seek(0)
 
         st.subheader("Download Outputs")
-        col_a, col_b, col_c = st.columns(3)
+        col_a, col_b, col_c, col_d = st.columns(4)
 
         with col_a:
             st.download_button(
@@ -754,6 +892,14 @@ Upload a CPRF `.xlsx` file with these mandatory columns:
             )
 
         with col_c:
+            st.download_button(
+                label="Download Missing Contact Numbers",
+                data=missing_contact_output.getvalue(),
+                file_name=missing_contact_filename,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+
+        with col_d:
             st.download_button(
                 label="Download ZIP by ProgramLaunchName",
                 data=zip_buffer.getvalue(),
