@@ -232,3 +232,14 @@ This means no blank or recognised missing `CONTACTNUMBER` values were found in t
 **Application:** CPRF Validation Tool  
 **Released by:** Magic Bus Impact Team  
 **Current release:** v2026.01.02
+
+## Release Roadmap
+
+The CPRF Validation Tool follows a quarterly major-release structure.
+
+- `2026_01` — Q1 Major Release
+- `2026_02` — Q2 Major Release, planned for October 2026
+
+The planned `2026_02` release is expected to focus on data quality monitoring and corrective action, including a summary dashboard, geography/programme-level analysis, action-oriented correction files and validation run history.
+
+Minor fixes and incremental enhancements before the next major release will continue under the `2026_01.xx` series.

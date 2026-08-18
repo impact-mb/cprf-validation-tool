@@ -37,6 +37,59 @@ After successful login, users can access:
 
 ---
 
+## Planned Major Release — v2026_02
+
+**Target Release:** October 2026  
+**Release Type:** Quarterly Major Release  
+**Working Theme:** Data Quality Monitoring & Action Release
+
+### Planned Enhancements
+
+- Data Quality Dashboard with:
+  - Total records
+  - Clean records
+  - Records with validation issues
+  - Data Quality %
+  - Issue counts by validation type
+
+- Breakdown of data quality by:
+  - Region
+  - State
+  - District
+  - ProgramLaunchName
+  - Funder
+
+- Action-oriented Excel outputs with separate correction sheets for:
+  - Missing Contact Number
+  - Invalid School UDISE
+  - DOB Issues
+  - Age Issues
+  - Parent Consent Issues
+  - Parent Age Issues
+  - Religion Issues
+
+- Validation Run ID for every validation cycle.
+
+- Validation audit history capturing:
+  - Run ID
+  - Username
+  - Validation date
+  - Source file name
+  - Total records
+  - Error records
+  - Clean records
+  - Data Quality %
+  - App version
+
+- Updated User Manual, DFD and Release Notes.
+
+### Versioning Convention
+
+- `2026_01` — Q1 Major Release
+- `2026_01.01`, `2026_01.02`, etc. — Q1 Minor Releases
+- `2026_02` — Q2 Major Release
+- `2026_02.01`, `2026_02.02`, etc. — Q2 Minor Releases
+
 ## v2026.01.01 - Missing Contact Number Follow-up
 
 **Release Date:** 18 August 2026  
