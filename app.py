@@ -19,21 +19,35 @@ APP_OWNER = "Magic Bus Impact Team"
 HASH_SCHEME = "pbkdf2_sha256"
 
 
-def get_login_credentials():
-    """Read the username and PASSWORD HASH from Streamlit Secrets.
+def get_login_users():
+    """Read all configured users from Streamlit Secrets.
 
-    Required secrets:
-    - APP_USERNAME
-    - APP_PASSWORD_HASH
+    Expected secrets structure:
 
-    The original password is never stored in the repository or Streamlit Secrets.
+        [users.Narendra]
+        password_hash = "pbkdf2_sha256$..."
+        role = "admin"
+
+        [users.MB_FPD]
+        password_hash = "pbkdf2_sha256$..."
+        role = "user"
+
+    Plaintext passwords are never stored.
     """
     try:
-        username = str(st.secrets["APP_USERNAME"])
-        password_hash = str(st.secrets["APP_PASSWORD_HASH"])
-        return username, password_hash
+        users = st.secrets["users"]
+        result = {}
+        for username, config in users.items():
+            password_hash = str(config.get("password_hash", "")).strip()
+            role = str(config.get("role", "user")).strip().lower()
+            if password_hash:
+                result[str(username)] = {
+                    "password_hash": password_hash,
+                    "role": role or "user",
+                }
+        return result
     except Exception:
-        return None, None
+        return {}
 
 
 def verify_password(password: str, stored_hash: str) -> bool:
@@ -64,15 +78,20 @@ def verify_password(password: str, stored_hash: str) -> bool:
         return False
 
 
-def authenticate(username: str, password: str) -> bool:
-    """Authenticate a user without storing or comparing a plaintext password."""
-    expected_user, expected_password_hash = get_login_credentials()
-    if expected_user is None or expected_password_hash is None:
-        return False
+def authenticate(username: str, password: str):
+    """Authenticate a configured user and return account metadata on success."""
+    users = get_login_users()
+    if not users:
+        return None
 
-    username_ok = hmac.compare_digest(username, expected_user)
-    password_ok = verify_password(password, expected_password_hash)
-    return username_ok and password_ok
+    # Match usernames exactly while avoiding accidental whitespace issues.
+    account = users.get(username)
+    if account is None:
+        return None
+
+    if verify_password(password, account["password_hash"]):
+        return {"username": username, "role": account.get("role", "user")}
+    return None
 
 
 def render_login_page():
@@ -137,18 +156,21 @@ def render_login_page():
             )
 
         if submitted:
-            configured_user, configured_password_hash = get_login_credentials()
-            if configured_user is None or configured_password_hash is None:
+            configured_users = get_login_users()
+            if not configured_users:
                 st.error(
-                    "Login is not configured. Add APP_USERNAME and APP_PASSWORD_HASH "
-                    "to Streamlit Secrets."
+                    "Login is not configured. Add the [users.<username>] sections "
+                    "with password_hash and role to Streamlit Secrets."
                 )
-            elif authenticate(username.strip(), password):
-                st.session_state["authenticated"] = True
-                st.session_state["authenticated_user"] = username.strip()
-                st.rerun()
             else:
-                st.error("Invalid username or password.")
+                account = authenticate(username.strip(), password)
+                if account:
+                    st.session_state["authenticated"] = True
+                    st.session_state["authenticated_user"] = account["username"]
+                    st.session_state["authenticated_role"] = account["role"]
+                    st.rerun()
+                else:
+                    st.error("Invalid username or password.")
 
     st.markdown(
         '<div class="login-foot">Internal utility · Magic Bus Impact Team</div>',
@@ -168,12 +190,14 @@ def render_authenticated_header():
         st.caption(f"Released by {APP_OWNER}")
     with user_col:
         user = st.session_state.get("authenticated_user", "User")
+        role = st.session_state.get("authenticated_role", "user")
         st.caption("Signed in as")
-        st.write(f"**{user}**")
+        st.write(f"**{user}** · {role.title()}")
     with logout_col:
         if st.button("Logout", use_container_width=True):
             st.session_state["authenticated"] = False
             st.session_state.pop("authenticated_user", None)
+            st.session_state.pop("authenticated_role", None)
             st.rerun()
 
     st.divider()
